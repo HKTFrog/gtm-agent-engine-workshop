@@ -28,6 +28,8 @@ os.environ.setdefault("LANGSMITH_TRACING", "true")
 from pydantic import BaseModel
 from langchain.tools import tool, ToolRuntime
 from langchain_openai import ChatOpenAI
+from langsmith.wrappers import wrap_openai
+from openai import AsyncOpenAI, OpenAI
 from deepagents import create_deep_agent
 
 from . import data_service
@@ -93,7 +95,23 @@ class ProspectScore(BaseModel):
     rubric_breakdown: RubricBreakdown
 
 
-_scoring_llm = ChatOpenAI(model=MODEL_NAME, temperature=0).with_structured_output(ProspectScore)
+def _make_chat_model():
+    """Create a ChatOpenAI model with LangSmith OpenAI tracing."""
+    if os.getenv("OPENAI_API_KEY"):
+        openai_client = wrap_openai(OpenAI())
+        async_openai_client = wrap_openai(AsyncOpenAI())
+        return ChatOpenAI(
+            model=MODEL_NAME,
+            temperature=0,
+            client=openai_client.chat.completions,
+            root_client=openai_client,
+            async_client=async_openai_client.chat.completions,
+            root_async_client=async_openai_client,
+        )
+    return ChatOpenAI(model=MODEL_NAME, temperature=0)
+
+
+_scoring_llm = _make_chat_model().with_structured_output(ProspectScore)
 
 
 def _offering_has_required_fields(offering):
@@ -196,7 +214,7 @@ SYSTEM_PROMPT = (
     "pre-update data."
 )
 
-agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
+agent_model = _make_chat_model()
 
 gtm_agent = create_deep_agent(
     model=agent_model,
@@ -225,6 +243,13 @@ def classify_intent(user_message):
     return "other"
 
 
+def classify_workflow(user_message):
+    """Classify a request into an attribution workflow."""
+    if classify_intent(user_message) == "send_email":
+        return "outreach_email"
+    return "prospect_scoring"
+
+
 def run_agent(user_message, *, user_id=None, environment="production", thread_id=None):
     "Invoke the GTM agent on a single user message and return its final reply, message history, and LangSmith run id."
     thread_id = thread_id or str(uuid.uuid4())
@@ -242,6 +267,7 @@ def run_agent(user_message, *, user_id=None, environment="production", thread_id
                 "user_id": user_id,
                 "environment": environment,
                 "request_intent": classify_intent(user_message),
+                "workflow": classify_workflow(user_message),
             },
         },
     )
