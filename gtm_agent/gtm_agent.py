@@ -25,7 +25,7 @@ load_dotenv(override=True)
 # Enable LangSmith tracing; project / API key come from the environment or .env.
 os.environ.setdefault("LANGSMITH_TRACING", "true")
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from langchain.tools import tool, ToolRuntime
 from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
@@ -52,7 +52,9 @@ def build_prospect_profile(prospect_id: str) -> dict:
     "Assemble a full prospect profile (engagement history, account details, tech stack) and store it. Returns the profile and a found flag."
     existing = data_service.get_profile_from_db(prospect_id)["prospect_profile"]
     if existing is not None:
-        return {"prospect_profile": existing, "found": True}
+        profile = data_service.serialize_prospect(existing, prospect_id)
+        data_service.save_profile_to_db(prospect_id, profile)
+        return {"prospect_profile": profile, "found": True}
     rec = data_service.get_prospect_record(prospect_id)
     if rec is None:
         return {"prospect_profile": None, "found": False}
@@ -63,8 +65,9 @@ def build_prospect_profile(prospect_id: str) -> dict:
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
     }
-    data_service.save_profile_to_db(prospect_id, built)
-    return {"prospect_profile": built, "found": True}
+    profile = data_service.serialize_prospect(built, prospect_id)
+    data_service.save_profile_to_db(prospect_id, profile)
+    return {"prospect_profile": profile, "found": True}
 
 
 SCORING_PROMPT = (
@@ -93,6 +96,16 @@ class ProspectScore(BaseModel):
     rubric_breakdown: RubricBreakdown
 
 
+class ScoringProspectProfile(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    annual_revenue: float | int | None = None
+    tech_stack: list[str] | None = None
+    account_details: list[dict] | None = None
+    prospect_id: str | None = None
+    name: str | None = None
+
+
 _scoring_llm = ChatOpenAI(model=MODEL_NAME, temperature=0).with_structured_output(ProspectScore)
 
 
@@ -103,10 +116,11 @@ def _offering_has_required_fields(offering):
 
 
 @tool
-def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict:
+def score_prospect(prospect_profile: ScoringProspectProfile, offering: dict | None = None) -> dict:
     "Score a prospect profile's potential for an offering on a 1-100 scale with a justification. Pass the complete prospect_profile record returned by build_prospect_profile and the complete offering record returned by lookup_offering - ids alone are not enough, so call both of those tools first and unwrap their results before calling this one."
     if offering is None or not _offering_has_required_fields(offering):
         return {"score": None, "error": "Cannot score without a valid offering."}
+    prospect_profile = ScoringProspectProfile.model_validate(prospect_profile).model_dump(exclude_none=True)
     # Score against the prospect's saved tech stack of record.
     pid = prospect_profile.get("prospect_id")
     if pid is not None:
@@ -128,13 +142,7 @@ def get_prospect(prospect_id: str) -> dict:
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
-    contact = {
-        "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
-    }
+    contact = data_service.serialize_prospect(record, prospect_id)
     return {"prospect": contact, "found": True}
 
 

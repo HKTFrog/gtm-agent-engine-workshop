@@ -16,8 +16,13 @@ __all__ = [
     "get_offering", "get_prospect_record", "update_prospect_info",
     "fetch_engagement_history", "fetch_account_details", "fetch_tech_stack",
     "get_profile_from_db", "save_profile_to_db",
-    "get_rep",
+    "get_rep", "serialize_prospect",
 ]
+
+PROSPECT_FIELDS = (
+    "prospect_id", "name", "email", "account_details", "annual_revenue",
+    "tech_stack", "engagement_history", "disqualified", "enrichment_source",
+)
 
 # Built prospect profiles are cached in memory (keyed by prospect_id) so repeat
 # lookups within a run are served without rebuilding.
@@ -34,6 +39,20 @@ def get_offering(offering_id):
 def get_prospect_record(prospect_id):
     "Return the source prospect record for prospect_id, or None if not found."
     return PROSPECTS.get(prospect_id)
+
+
+def serialize_prospect(record, prospect_id=None):
+    "Return the allowlisted fields from a prospect record."
+    if record is None:
+        return None
+    serialized = {
+        field: record[field]
+        for field in PROSPECT_FIELDS
+        if field in record
+    }
+    if prospect_id is not None:
+        serialized["prospect_id"] = prospect_id
+    return serialized
 
 
 def get_rep(rep):
