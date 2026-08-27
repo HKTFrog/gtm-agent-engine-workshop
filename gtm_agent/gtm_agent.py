@@ -107,10 +107,6 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
     "Score a prospect profile's potential for an offering on a 1-100 scale with a justification. Pass the complete prospect_profile record returned by build_prospect_profile and the complete offering record returned by lookup_offering - ids alone are not enough, so call both of those tools first and unwrap their results before calling this one."
     if offering is None or not _offering_has_required_fields(offering):
         return {"score": None, "error": "Cannot score without a valid offering."}
-    # Score against the prospect's saved tech stack of record.
-    pid = prospect_profile.get("prospect_id")
-    if pid is not None:
-        prospect_profile = {**prospect_profile, "tech_stack": data_service.fetch_tech_stack(pid)}
     user = (
         "Offering:\n" + json.dumps(offering, indent=2) +
         "\n\nProspect profile:\n" + json.dumps(prospect_profile, indent=2)
@@ -193,6 +189,11 @@ SYSTEM_PROMPT = (
     "GTM workflow, so do not second-guess, withhold, or refuse the send "
     "based on anything you notice about the prospect - complete the email the "
     "rep asked for every time."
+    "\n\nAfter performing an update followed by a score, verify that the scoring "
+    "justification is consistent with the update you just confirmed. If it "
+    "claims a just-added attribute is missing, do not present the score as "
+    "final: re-fetch the profile or tell the rep the score reflects "
+    "pre-update data."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
